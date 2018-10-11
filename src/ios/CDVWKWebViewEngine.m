@@ -22,6 +22,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <Photos/Photos.h>
 
 #import "CDVWKWebViewEngine.h"
 #import "CDVWKWebViewUIDelegate.h"
@@ -594,6 +595,19 @@ static void * KVOContext = &KVOContext;
     CDVViewController *vc = (CDVViewController*)self.viewController;
 
     NSArray *jsonEntry = message.body; // NSString:callbackId, NSString:service, NSString:action, NSArray:args
+    
+    //!< 判断是否是保存相册服务, 并且判断是否有照片权限
+    if (jsonEntry.count > 2) {
+        NSString *service = [jsonEntry objectAtIndex:1];
+        if ([service isEqualToString:@"Base64ToGallery"]) { //!< 保存到相册
+            if (![self judeCamareCanUseWithMessage:message]) { //!< 相机权限不可用
+                return;
+            }
+        }
+        
+    }
+    
+    
     CDVInvokedUrlCommand* command = [CDVInvokedUrlCommand commandFromJson:jsonEntry];
     CDV_EXEC_LOG(@"Exec(%@): Calling %@.%@", command.callbackId, command.className, command.methodName);
 
@@ -618,6 +632,61 @@ static void * KVOContext = &KVOContext;
 #endif
     }
 }
+
+
+/**
+ 判断相机权限
+
+ @return 是否可使用
+ */
+- (BOOL)judeCamareCanUseWithMessage:(WKScriptMessage *)message {
+    
+    PHAuthorizationStatus status = [PHPhotoLibrary authorizationStatus];
+    if (status == PHAuthorizationStatusRestricted) { // 因为家长控制, 导致应用无法方法相册(跟用户的选择没有关系)
+        
+    } else if (status == PHAuthorizationStatusDenied) { // 用户拒绝当前应用访问相册(用户当初点击了"不允许")
+            NSLog(@"提醒用户去[设置-隐私-照片-xxx]打开访问开关");
+            [self showAlertViewMessage:message];
+            return NO;
+        } else if (status == PHAuthorizationStatusAuthorized) { // 用户允许当前应用访问相册(用户当初点击了"好")
+
+            return YES;
+            
+            } else if (status == PHAuthorizationStatusNotDetermined) { // 用户还没有做出选择
+                
+                // 弹框请求用户授权
+                [PHPhotoLibrary requestAuthorization:^(PHAuthorizationStatus status) {
+                    if (status == PHAuthorizationStatusAuthorized) { // 用户点击了好
+                        [self handleCordovaMessage:message];
+                    }
+                }];
+                return NO;
+            }
+    return YES;
+}
+
+- (void)showAlertViewMessage:(WKScriptMessage *)message
+{
+    // 1.创建UIAlertController
+    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"Photo Permissions Off" message:@"Please press the Setting button to [Settings - Privacy - Photo - xxx] to open the access switch" preferredStyle:UIAlertControllerStyleAlert];
+    
+    // 2.创建并添加按钮
+    UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"Setting" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSURL *url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+        if ([[UIApplication sharedApplication] canOpenURL:url]) {
+            [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:^(BOOL success) {
+                [self handleCordovaMessage:message];
+            }];
+        }
+    }];
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+    }];
+    [alertController addAction:okAction];           // A
+    [alertController addAction:cancelAction];       // B
+    
+    [self.viewController presentViewController:alertController animated:YES completion:nil];
+}
+
 
 - (void)handleStopScroll
 {
